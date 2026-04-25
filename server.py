@@ -1,42 +1,56 @@
+from contextlib import asynccontextmanager
+
 from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 INSTRUCTION_STRING = """
-Olet yhteydessä Käypä hoito -tietokantaan — Suomen kansalliseen lääketieteelliseen
-suositustietokantaan, joka sisältää näyttöön perustuvat hoitosuositukset.
+You are connected to Käypä hoito — Finland's national evidence-based clinical
+guideline database (Finnish language). 139 guidelines covering all major conditions.
 
-TYÖNKULKU:
-1. hae_suositukset — KÄYTÄ ENSIN kun käyttäjä kysyy suosituksesta aihepiirin perusteella
-   → Löytyikö tuloksia? → kutsu hae_suositus URL:lla
-   → Ei tuloksia? → kokeile lyhyempää hakusanaa
+WORKFLOW:
+1. hae_suositukset(hakusana=<Finnish keyword>)
+   → USE FIRST when user asks about any medical topic
+   → Returns actual guideline documents with URLs
+   → If results found: call hae_suositus with URL from results
+   → If no results: try shorter word or synonym
 
-2. hae_suositus — KÄYTÄ kun sinulla on URL tai suositustunnus (esim. hoi50056)
-   → Palauttaa suosituksen otsikon, päivityspäivän, tekijät ja osioiden sisällöt
+2. hae_suositus(url=<hoi-URL>)
+   → USE when you have a URL (e.g. hoi50056)
+   → Returns title, update date, and all clinical sections
 
-HAKUVINKKEJÄ:
-- Käytä suomenkielisiä hakusanoja: "diabetes", "astma", "verenpaine", "sydän"
-- Lyhyet sanat toimivat paremmin kuin pitkät
-- Suositustunnukset alkavat "hoi" (esim. hoi50056 = Tyypin 2 diabetes)
+SEARCH TIPS — use Finnish terms:
+  diabetes, verenpaine, astma, sydän, masennus, kipu, syöpä, unettomuus
+  Guideline IDs start with "hoi" (e.g. hoi50056 = Tyypin 2 diabetes)
 
-MITÄ TÄMÄ PALVELIN EI VOI TEHDÄ:
-- Hakea muiden maiden hoitosuosituksia
-- Antaa henkilökohtaisia lääkärinohjeita
-- Käyttää Duodecim-palvelun maksullista sisältöä
+CANNOT DO:
+  - Guidelines from other countries
+  - Personal medical advice
+  - Paid Duodecim content
 
-Tietolähde: https://www.kaypahoito.fi | Kieli: suomi
+Source: https://www.kaypahoito.fi | Language: Finnish
 """
 
+@asynccontextmanager
+async def lifespan(server):
+    """Warm the catalog cache on startup so the first search is instant."""
+    from kaypahoito_client import get_catalog
+    catalog = await get_catalog()
+    print(f"[startup] Catalog warmed: {len(catalog)} suositukset")
+    yield
+
+
 mcp = FastMCP(
-    name="Käypä hoito",
+    name="Kaypa hoito",
     instructions=INSTRUCTION_STRING,
-    version="1.0.0",
+    version="1.1.0",
     website_url="https://www.kaypahoito.fi/suositukset",
+    lifespan=lifespan,
 )
 
 from tools_kaypahoito import hae_suositukset, hae_suositus
 
-# CRITICAL: meta={"requires_permission": False} — prevents Intric from prompting user per call
+# meta={"requires_permission": False} — prevents Intric from prompting the user on every call
 mcp.tool(name="hae_suositukset", meta={"requires_permission": False})(hae_suositukset)
 mcp.tool(name="hae_suositus", meta={"requires_permission": False})(hae_suositus)
 

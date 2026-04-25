@@ -1,70 +1,102 @@
 """Käypä hoito MCP tools."""
 
-from kaypahoito_client import search_wp, fetch_suositus_html, parse_suositus
+from __future__ import annotations
 
-BASE_URL = "https://www.kaypahoito.fi"
+from kaypahoito_client import (
+    BASE_URL,
+    fetch_suositus_html,
+    get_catalog,
+    parse_suositus,
+    search_catalog,
+    search_wp,
+)
 
 
 async def hae_suositukset(hakusana: str) -> str:
     """
-    Hae Käypä hoito -suosituksia hakusanalla WP Search -rajapinnasta.
+    Search Käypä hoito guidelines by keyword. Returns actual guideline documents.
 
-    KÄYTÄ TÄTÄ TYÖKALUA KUN:
-    - Käyttäjä kysyy Käypä hoito -suosituksista aihepiirin perusteella
-    - Käyttäjä pyytää listauksen suosituksista tiettyyn sairauteen tai oireeseen liittyen
-    - Käyttäjä kysyy "mitä suosituksia on X:stä?"
-    - Haluat etsiä suosituksia ennen yksityiskohtien hakemista
+    USE THIS TOOL WHEN:
+    - User asks about a medical condition or symptom in Finnish
+    - User wants to find guidelines before reading details
 
-    TYÖNKULKU:
-    → Löytyikö tuloksia? → kutsu hae_suositus löydetyn URL:n perusteella
-    → Ei tuloksia? → kokeile lyhyempää hakusanaa tai synonyymejä
+    THEN CALL:
+    → Found results? → call hae_suositus(url=<URL from results>)
+    → No results? → try a shorter Finnish term or synonym
 
-    ÄLÄ KÄYTÄ KUN:
-    - Sinulla on jo URL tai tunnus (esim. hoi50056) → käytä hae_suositus suoraan
+    DO NOT USE WHEN:
+    - You already have a URL like hoi50056 → call hae_suositus directly
 
     Parameters:
-    - hakusana: hakusana suomeksi, esim. "diabetes", "verenpaine", "astma", "sydäninfarkti"
+    - hakusana: Finnish keyword, e.g. "diabetes", "verenpaine", "astma", "sydän", "masennus"
     """
-    results = await search_wp(hakusana, per_page=20)
+    # Primary: search the embedded catalog — returns actual suositus documents
+    catalog = await get_catalog()
+    matches = search_catalog(catalog, hakusana)
 
-    if not results:
-        return f"Hakusanalla '{hakusana}' ei löytynyt tuloksia. Kokeile lyhyempää tai yleisempää hakusanaa."
+    if matches:
+        lines = [f"Löytyi {len(matches)} suositusta: '{hakusana}'\n"]
+        for item in matches:
+            nimi = item["nimi"]
+            otsikko = item.get("otsikko") or nimi
+            kuvaus = item.get("kuvaus") or ""
+            updated = (item.get("sisaltopvm") or item.get("paivityspvm") or "")[:10]
+            erikoisalat = ", ".join(
+                e["erikoisala"] for e in item.get("Erikoisalat", [])[:3]
+            )
+            url = f"{BASE_URL}/{nimi}"
 
-    lines = [f"Hakutulokset ({len(results)}) hakusanalle '{hakusana}':\n"]
-    for item in results[:20]:
-        title = item.get("title", "Ei otsikkoa")
-        url = item.get("url", "")
-        lines.append(f"**{title}**")
-        lines.append(f"  URL: {url}")
+            lines.append(f"**{otsikko}**")
+            lines.append(f"  URL: {url}")
+            if kuvaus:
+                lines.append(f"  {kuvaus[:180]}")
+            if erikoisalat:
+                lines.append(f"  Erikoisalat: {erikoisalat}")
+            if updated:
+                lines.append(f"  Päivitetty: {updated}")
+            lines.append("")
+
+        lines.append(
+            f"Seuraava askel: hae_suositus(url='https://www.kaypahoito.fi/hoi...')"
+        )
+        return "\n".join(lines)
+
+    # Fallback: WP full-text search (returns news, not the guidelines themselves)
+    wp_results = await search_wp(hakusana, per_page=10)
+    if not wp_results:
+        return (
+            f"Ei suosituksia hakusanalla '{hakusana}'. "
+            f"Kokeile: diabetes, astma, verenpaine, sydän, masennus, kipu, syöpä."
+        )
+
+    lines = [
+        f"Suositusluettelossa ei osumia. Löytyi {len(wp_results)} artikkelia: '{hakusana}'\n"
+    ]
+    for item in wp_results[:10]:
+        lines.append(f"**{item.get('title', '')}**")
+        lines.append(f"  URL: {item.get('url', '')}")
         lines.append("")
-
-    lines.append(
-        f"Vinkki: Hae yksittäisen suosituksen sisältö kutsumalla hae_suositus(url=...) "
-        f"jollakin yllä listatulla URL:lla."
-    )
     return "\n".join(lines)
 
 
 async def hae_suositus(url: str) -> str:
     """
-    Hae yksittäisen Käypä hoito -suosituksen sisältö URL:n perusteella.
+    Fetch the full content of a single Käypä hoito guideline by URL.
 
-    KÄYTÄ TÄTÄ TYÖKALUA KUN:
-    - Sinulla on suosituksen URL (esim. https://www.kaypahoito.fi/hoi50056 tai hoi50056)
-    - Käyttäjä pyytää suosituksen sisältöä, hoito-ohjeita tai suosituksen keskeistä sanomaa
-    - Haluat lukea suosituksen osiot ja lääketieteellisen sisällön
+    USE THIS TOOL WHEN:
+    - You have a guideline URL (e.g. hoi50056 or https://www.kaypahoito.fi/hoi50056)
+    - User wants the actual clinical recommendations, treatment steps, or key messages
 
-    TYÖNKULKU:
-    → Ensin hae_suositukset-työkalulla → saat URL:n → kutsu tätä URL:lla
+    WORKFLOW:
+    → First call hae_suositukset to get the URL, then call this tool
 
-    ÄLÄ KÄYTÄ KUN:
-    - Et tiedä URL:ia → kutsu ensin hae_suositukset
+    DO NOT USE WHEN:
+    - You don't have a URL yet → call hae_suositukset first
 
     Parameters:
-    - url: suosituksen URL tai tunnus, esim. "https://www.kaypahoito.fi/hoi50056",
-      "hoi50056", "hoi50068", "https://www.kaypahoito.fi/kht00070"
+    - url: guideline slug or full URL, e.g. "hoi50056", "hoi50068",
+      "https://www.kaypahoito.fi/hoi50056"
     """
-    # Normalize URL
     if not url.startswith("http"):
         url = f"{BASE_URL}/{url.lstrip('/')}"
 
@@ -72,28 +104,40 @@ async def hae_suositus(url: str) -> str:
     data = parse_suositus(html, url)
 
     if not data["title"]:
-        return f"Suositusta ei löydy osoitteesta: {url}"
+        return f"Suositusta ei löydy: {url}"
 
-    lines = [
-        f"# {data['title']}",
-        "",
-    ]
+    # Build compact, token-efficient output
+    lines: list[str] = [f"# {data['title']}", ""]
 
+    meta_parts: list[str] = []
     if data["updated"]:
-        lines.append(f"**Päivitetty:** {data['updated']}")
+        meta_parts.append(f"Päivitetty: {data['updated']}")
     if data["authors"]:
-        lines.append(f"**Tekijät:** {data['authors'][:200]}")
-    lines.append(f"**URL:** {url}")
+        # Trim long author strings — the working group name can be very long
+        authors = data["authors"]
+        if len(authors) > 120:
+            authors = authors[:120] + "…"
+        meta_parts.append(f"Tekijät: {authors}")
+    meta_parts.append(f"Lähde: {url}")
+    lines.append(" | ".join(meta_parts))
     lines.append("")
 
-    if data["sections"]:
-        lines.append("## Osiot\n")
-        for section in data["sections"][:20]:
-            lines.append(f"### {section['heading']}")
-            lines.append(section["text"][:800])
-            lines.append("")
-    else:
-        # Fallback: plain text
-        lines.append(data["full_text"][:6000])
+    sections = data["sections"]
+    if not sections:
+        return "\n".join(lines) + "\n(Sisältöä ei voitu poimia tältä sivulta.)"
+
+    # Prioritize: show "keskeinen sanoma" first if present
+    priority_keywords = ("keskeinen", "sanoma", "tiivistelmä", "johdanto", "tavoite")
+    priority = [s for s in sections if any(k in s["heading"].lower() for k in priority_keywords)]
+    rest = [s for s in sections if s not in priority]
+
+    ordered = priority[:3] + rest  # lead with the most useful sections
+    output_chars = 0
+    for section in ordered[:15]:
+        block = f"## {section['heading']}\n{section['text']}\n"
+        if output_chars + len(block) > 10_000:
+            break
+        lines.append(block)
+        output_chars += len(block)
 
     return "\n".join(lines)
