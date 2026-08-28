@@ -81,6 +81,26 @@ test(
     expected_min_chars=100,
 )
 
+# 6. Regression: Intric injects observability_context into every tools/call.
+#    Go through the real MCP layer — a plain function call would not catch it.
+async def call_via_mcp_with_injected_arg() -> str:
+    from fastmcp import Client
+    from server import mcp
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "hae_suositukset",
+            {"hakusana": "diabetes", "observability_context": {"tool_use_id": "test"}},
+        )
+        return result.content[0].text
+
+
+test(
+    "MCP call with Intric's observability_context",
+    call_via_mcp_with_injected_arg,
+    expected_min_chars=100,
+)
+
 # --- Summary ---
 print(f"\n{'='*60}")
 print("VERIFICATION SUMMARY")

@@ -4,6 +4,8 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
+from middleware_compat import DropUnknownArgumentsMiddleware
+
 INSTRUCTION_STRING = """
 You are connected to Käypä hoito — Finland's national evidence-based clinical
 guideline database (Finnish language). 139 guidelines covering all major conditions.
@@ -43,9 +45,12 @@ async def lifespan(server):
 mcp = FastMCP(
     name="Kaypa hoito",
     instructions=INSTRUCTION_STRING,
-    version="1.1.0",
+    version="1.1.1",
     website_url="https://www.kaypahoito.fi/suositukset",
     lifespan=lifespan,
+    # Intric adds observability_context to every tools/call payload; without this
+    # FastMCP rejects the call before the tool runs.
+    middleware=[DropUnknownArgumentsMiddleware()],
 )
 
 from tools_kaypahoito import hae_suositukset, hae_suositus
